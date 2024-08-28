@@ -1,0 +1,6 @@
+nohup: ignoring input
+
+> webmakerback@1.0.0 start
+> ts-node src/index.ts
+
+Server is running on http://localhost:8090
