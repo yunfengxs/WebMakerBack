@@ -11,13 +11,27 @@ function isError(error: unknown): error is Error {
 
 // 创建users（C）
 router.post('/', async (req: Request, res: Response) => {
-  const { name, email, age, status, created_at } = req.body;
+  const { id, name, email, age, status, created_at } = req.body;
+
+  const values = [req.body.id, req.body.name, req.body.email, req.body.age, req.body.status];
+  
+  let query = `INSERT INTO users (id, name, email, age, status) VALUES (?, ?, ?, ?, ?)`;
+
+  if (created_at !== undefined) {
+    query = `INSERT INTO users (id, name, email, age, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`;
+    values.push(created_at);
+  }
+
   try {
-    const [result] = await pool.query(
-      'INSERT INTO users (name, email, age, status, created_at) VALUES (?, ?, ?, ?, ?)',
-      [name, email, age, status, created_at]
-    );
-    res.status(201).json({ id: (result as any).insertId, name, email, age, status, created_at });
+    const [result] = await pool.query(query, values);
+    res.status(201).json({
+      id: (result as any).insertId,
+      name,
+      email,
+      age,
+      status,
+      ...(created_at !== undefined && { created_at }) // 有条件地添加 created_at
+    });
   } catch (error) {
     if (isError(error)) {
       res.status(500).json({ error: error.message });
@@ -64,11 +78,18 @@ router.get('/:id', async (req: Request, res: Response) => {
 router.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   const { name, email, age, status, created_at } = req.body;
+  
+  const values = [req.body.name, req.body.email, req.body.age, req.body.status, id];
+  
+  let query = `UPDATE users SET id = ?, name = ?, email = ?, age = ?, status = ? WHERE id = ?`;
+
+  if (created_at !== undefined) {
+    query = `UPDATE users SET id = ?, name = ?, email = ?, age = ?, status = ?, created_at = ? WHERE id = ?`;
+    values.push(created_at);
+  }
+
   try {
-    const [result] = await pool.query(
-      'UPDATE users SET name = ?, email = ?, age = ?, status = ?, created_at = ? WHERE id = ?',
-      [name, email, age, status, created_at, id]
-    );
+    const [result] = await pool.query(query, values);
     if ((result as any).affectedRows > 0) {
       res.json({ id, name, email, age, status, created_at });
     } else {

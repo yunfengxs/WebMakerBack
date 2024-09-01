@@ -1,5 +1,31 @@
 import re
-import os
+
+def parse_default_value(default_value):
+    """处理SQL中DEFAULT值"""
+    if default_value.upper() == 'CURRENT_TIMESTAMP':
+        return 'CURRENT_TIMESTAMP'  # 特殊处理CURRENT_TIMESTAMP
+    elif default_value.startswith("'") and default_value.endswith("'"):
+        return f"'{default_value[1:-1]}'"
+    else:
+        return default_value
+
+def parse_fields(statement):
+    """解析字段，返回字段信息和具有默认值的字段字典"""
+    fields = re.findall(
+        r'(\w+)\s+([A-Z]+(?:\([\d,\' ]+\))?)(?:\s+DEFAULT\s+([^\s,]+))?', statement, re.IGNORECASE
+    )
+    parsed_fields = []
+    default_values = {}
+    for field in fields:
+        field_name, field_type, default_value = field
+        if default_value:
+            parsed_fields.append((field_name, field_type, default_value))
+            parsed_default = parse_default_value(default_value)
+            if parsed_default:
+                default_values[field_name] = parsed_default
+        else:
+            parsed_fields.append((field_name, field_type, None))
+    return parsed_fields, default_values
 
 # 读取文件中的所有内容
 with open('tables.sql', 'r') as file:
@@ -14,18 +40,18 @@ for statement in table_statements:
     table_name = table_name_match.group(1) if table_name_match else "unknown_table"
 
     # 解析字段，过滤掉关键字和约束部分
-    fields = re.findall(
-        r'(\w+)\s+([A-Z]+(?:\([\d,\' ]+\))?)', statement, re.IGNORECASE
-    )
+    fields, default_values = parse_fields(statement)
 
     # 过滤出有效字段，排除约束部分
-    valid_fields = []
-    for field in fields:
-        field_name, field_type = field
-        if field_name.upper() not in ['PRIMARY', 'KEY', 'UNIQUE', 'AUTO_INCREMENT', 'NOT', 'NULL', 'DEFAULT', 'CREATE']:
-            valid_fields.append(field)
+    valid_fields = [field for field in fields if field[0].upper() not in ['PRIMARY', 'KEY', 'UNIQUE', 'AUTO_INCREMENT', 'NOT', 'NULL', 'CREATE']]
 
-    # 准备生成TypeScript代码的模板
+    # 生成 INSERT 和 UPDATE 语句的字段和占位符
+    insert_fields = [field[0] for field in valid_fields if field[0] not in default_values]
+    insert_placeholders = ', '.join(['?' for _ in insert_fields])
+    update_fields = [f'{field[0]} = ?' for field in valid_fields if field[0] not in default_values]
+    update_placeholders = ', '.join(update_fields)
+
+    # 准备 TypeScript 代码的模板
     router_template = f"""
 import express, {{ Request, Response }} from 'express';
 import pool from '../db';
@@ -39,13 +65,27 @@ function isError(error: unknown): error is Error {{
 
 // 创建{table_name}（C）
 router.post('/', async (req: Request, res: Response) => {{
-  const {{ {', '.join([field[0] for field in valid_fields if field[0] != 'id'])} }} = req.body;
+  const {{ {', '.join(insert_fields)}, created_at }} = req.body;
+
+  const values = [{', '.join([f"req.body.{field[0]}" if field[0] not in default_values else f"req.body.{field[0]} ?? {default_values[field[0]]}" for field in valid_fields if field[0] not in default_values])}];
+  
+  let query = `INSERT INTO {table_name} ({', '.join(insert_fields)}) VALUES ({insert_placeholders})`;
+
+  if (created_at !== undefined) {{
+    query = `INSERT INTO {table_name} ({', '.join(insert_fields)}, created_at) VALUES ({insert_placeholders}, ?)`;
+    values.push(created_at);
+  }}
+
   try {{
-    const [result] = await pool.query(
-      'INSERT INTO {table_name} ({', '.join([field[0] for field in valid_fields if field[0] != 'id'])}) VALUES ({', '.join(['?' for _ in valid_fields if _[0] != 'id'])})',
-      [{', '.join([field[0] for field in valid_fields if field[0] != 'id'])}]
-    );
-    res.status(201).json({{ id: (result as any).insertId, {', '.join([field[0] for field in valid_fields if field[0] != 'id'])} }});
+    const [result] = await pool.query(query, values);
+    res.status(201).json({{
+      id: (result as any).insertId,
+      name,
+      email,
+      age,
+      status,
+      ...(created_at !== undefined && {{ created_at }}) // 有条件地添加 created_at
+    }});
   }} catch (error) {{
     if (isError(error)) {{
       res.status(500).json({{ error: error.message }});
@@ -92,11 +132,18 @@ router.get('/:id', async (req: Request, res: Response) => {{
 router.put('/:id', async (req: Request, res: Response) => {{
   const {{ id }} = req.params;
   const {{ {', '.join([field[0] for field in valid_fields if field[0] != 'id'])} }} = req.body;
+  
+  const values = [{', '.join([f"req.body.{field[0]}" if field[0] not in default_values else f"req.body.{field[0]} ?? {default_values[field[0]]}" for field in valid_fields if field[0] != 'id' and field[0] not in default_values])}, id];
+  
+  let query = `UPDATE {table_name} SET {update_placeholders} WHERE id = ?`;
+
+  if (created_at !== undefined) {{
+    query = `UPDATE {table_name} SET {update_placeholders}, created_at = ? WHERE id = ?`;
+    values.push(created_at);
+  }}
+
   try {{
-    const [result] = await pool.query(
-      'UPDATE {table_name} SET {', '.join([f"{field[0]} = ?" for field in valid_fields if field[0] != 'id'])} WHERE id = ?',
-      [{', '.join([field[0] for field in valid_fields if field[0] != 'id'])}, id]
-    );
+    const [result] = await pool.query(query, values);
     if ((result as any).affectedRows > 0) {{
       res.json({{ id, {', '.join([field[0] for field in valid_fields if field[0] != 'id'])} }});
     }} else {{
