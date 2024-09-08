@@ -4,6 +4,7 @@ import bodyParser from 'body-parser';
 import userRoutes from './routes/users_router';
 import user_mulRoutes from './routes/users_mul_router';
 import father_routes from './routes/father_router';
+import weapons_routes from './routes/weapons_router'
 
 const app = express();
 const port = 8090;
@@ -26,7 +27,7 @@ app.use(bodyParser.json());
 app.use('/users', userRoutes);
 app.use('/users_mul', user_mulRoutes);
 app.use('/father', father_routes);
-
+app.use('/weapons', weapons_routes);
 
 // 启动服务器
 app.listen(port, () => {
